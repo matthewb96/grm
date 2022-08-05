@@ -1,6 +1,8 @@
 use std::{
     env,
+    io::{self, Write},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use anyhow::{anyhow, Result};
@@ -80,6 +82,20 @@ fn find_repositories(folder: &Path, recursive: bool, count: &mut usize) -> Resul
     Ok(repos)
 }
 
+/// Checks and displays repository status.
+fn repo_status(folder: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .arg("status")
+        .current_dir(&folder)
+        .output()?;
+
+    println!("status: {}", output.status);
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -93,9 +109,12 @@ fn main() -> Result<()> {
     let mut count = 0;
     let repos = find_repositories(&folder, true, &mut count)?;
 
-    println!("\nFound {} repositories", repos.len());
-    for r in repos {
-        println!("{:?} is repo", r);
+    println!("\nFound {} repositories\n{}", repos.len(), "-".repeat(100));
+
+    for r in &repos {
+        println!("Repo: {}", r.to_string_lossy());
+        repo_status(&r)?;
+        println!("{}", "-".repeat(100));
     }
 
     Ok(())
