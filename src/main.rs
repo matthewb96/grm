@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -6,6 +7,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Result};
+use csv::Writer;
 
 /// Expected name of the git folder
 const GIT_DIR: &str = ".git";
@@ -82,16 +84,80 @@ fn find_repositories(folder: &Path, recursive: bool, count: &mut usize) -> Resul
     Ok(repos)
 }
 
+/// Git status of a repository
+#[derive(Debug)]
+struct Status {
+    name: String,
+    command_status: Option<i32>,
+    branch: String,
+    clean: bool,
+    changes: String,
+}
+
 /// Checks and displays repository status.
-fn repo_status(folder: &Path) -> Result<()> {
+fn repo_status(folder: &Path) -> Result<Status> {
     let output = Command::new("git")
-        .arg("status")
+        .args(["status", "-b", "--porcelain"])
         .current_dir(&folder)
         .output()?;
 
-    println!("status: {}", output.status);
-    io::stdout().write_all(&output.stdout)?;
-    io::stderr().write_all(&output.stderr)?;
+    let mut branch = String::new();
+    let mut changes = String::new();
+
+    let stdout = std::str::from_utf8(&output.stdout)?;
+
+    for line in stdout.split('\n') {
+        if line.starts_with('#') {
+            branch.push_str(&format!("{}\n", line.trim_start_matches('#')));
+        } else {
+            changes.push_str(&format!("{}\n", line));
+        }
+    }
+
+    branch = branch.trim().to_string();
+    changes = changes.trim().to_string();
+    let clean = changes.len() == 0;
+
+    Ok(Status {
+        name: match folder.file_name() {
+            Some(s) => s.to_string_lossy().to_string(),
+            None => "".to_string(),
+        },
+        command_status: output.status.code(),
+        branch,
+        clean,
+        changes,
+    })
+}
+
+/// Check status of repositories and write to CSV,
+fn write_status_csv(repos: Vec<PathBuf>, file: &Path) -> Result<()> {
+    let mut csv_file = Writer::from_path(file)?;
+
+    csv_file.write_record([
+        "path",
+        "name",
+        "command_status",
+        "branch",
+        "clean",
+        "changes",
+    ])?;
+
+    for r in &repos {
+        let status = repo_status(&r)?;
+
+        csv_file.write_record([
+            r.to_string_lossy().to_string(),
+            status.name,
+            match status.command_status {
+                Some(s) => s.to_string(),
+                None => "".to_string(),
+            },
+            status.branch,
+            status.clean.to_string(),
+            status.changes,
+        ])?;
+    }
 
     Ok(())
 }
@@ -108,14 +174,13 @@ fn main() -> Result<()> {
 
     let mut count = 0;
     let repos = find_repositories(&folder, true, &mut count)?;
-
     println!("\nFound {} repositories\n{}", repos.len(), "-".repeat(100));
 
-    for r in &repos {
-        println!("Repo: {}", r.to_string_lossy());
-        repo_status(&r)?;
-        println!("{}", "-".repeat(100));
-    }
+    let path = PathBuf::from("repo_status.csv");
+
+    write_status_csv(repos, &path)?;
+
+    println!("Written: {}", path.to_string_lossy());
 
     Ok(())
 }
